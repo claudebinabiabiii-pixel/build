@@ -20,228 +20,68 @@ jobs:
     timeout-minutes: 120
     
     steps:
-      # ============================================================
-      # 1. Setup Environment
-      # ============================================================
-      - name: Set up JDK 11
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '11'
-          cache: gradle
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. Download & Extract Project
-      # ============================================================
-      - name: Download project from URL
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+
+      - name: Download project
         run: |
-          mkdir -p build-workspace
-          cd build-workspace
-          echo "Downloading from: ${{ github.event.inputs.zip_url }}"
+          mkdir -p work
+          cd work
           wget -q "${{ github.event.inputs.zip_url }}" -O project.zip
-          if [ ! -f project.zip ]; then
-            echo "Error: Failed to download project ZIP"
-            exit 1
-          fi
-          echo "Extracting project..."
           unzip -q project.zip
           rm project.zip
-          echo "Project structure:"
           ls -la
 
-      # ============================================================
-      # 3. Find and Enter Project Directory
-      # ============================================================
-      - name: Find Flutter project root
-        id: find_project
+      - name: Find project
+        id: project
         run: |
-          cd build-workspace
-          # If pubspec.yaml exists in current dir
+          cd work
           if [ -f pubspec.yaml ]; then
-            echo "project_path=." >> $GITHUB_OUTPUT
-            echo "Found pubspec.yaml in root"
-          # If pubspec.yaml exists in subdirectory
-          elif [ -f */pubspec.yaml ]; then
-            PROJECT_DIR=$(find . -name pubspec.yaml -type f | head -1 | xargs dirname)
-            echo "project_path=$PROJECT_DIR" >> $GITHUB_OUTPUT
-            echo "Found pubspec.yaml in: $PROJECT_DIR"
+            echo "path=." >> $GITHUB_OUTPUT
           else
-            echo "Error: pubspec.yaml not found"
-            find . -type f -name "pubspec.yaml" | head -20
-            exit 1
+            DIR=$(find . -name pubspec.yaml -type f | head -1 | xargs dirname)
+            echo "path=$DIR" >> $GITHUB_OUTPUT
           fi
 
-      # ============================================================
-      # 4. Install Flutter SDK
-      # ============================================================
-      - name: Install Flutter SDK
+      - name: Get dependencies
+        working-directory: work/${{ steps.project.outputs.path }}
         run: |
-          mkdir -p flutter
-          cd flutter
-          git init
-          git remote add origin https://github.com/flutter/flutter.git
-          git fetch --depth 1 origin stable
-          git checkout FETCH_HEAD
-          echo "$(pwd)/bin" >> $GITHUB_PATH
-          flutter --version
-          flutter config --enable-web
-          
-      # ============================================================
-      # 5. Setup Android SDK & Tools
-      # ============================================================
-      - name: Setup Android SDK
-        run: |
-          mkdir -p $ANDROID_HOME/cmdline-tools
-          cd $ANDROID_HOME/cmdline-tools
-          
-          # Download cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-*.zip
-          
-          # Create tools directory
-          mv cmdline-tools tools
-          
-          # Set ANDROID_HOME
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "PATH=$PATH:$ANDROID_HOME/cmdline-tools/tools/bin:$ANDROID_HOME/platform-tools" >> $GITHUB_ENV
-          
-          # Accept licenses
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          
-          # Install required packages
-          sdkmanager "platforms;android-34" > /dev/null 2>&1
-          sdkmanager "build-tools;34.0.0" > /dev/null 2>&1
-          
-          echo "Android SDK setup complete"
-
-      # ============================================================
-      # 6. Get Flutter Dependencies
-      # ============================================================
-      - name: Get Flutter dependencies
-        working-directory: build-workspace/${{ steps.find_project.outputs.project_path }}
-        run: |
-          echo "Getting dependencies..."
           flutter clean
-          flutter pub get --no-example
-          
-          # Show dependency resolution
-          echo "Dependencies resolved:"
-          flutter pub outdated --no-dev || true
-          
-          # Try to fix pub issues
-          flutter pub upgrade || true
+          flutter pub get
 
-      # ============================================================
-      # 7. Check Flutter & Dart Setup
-      # ============================================================
-      - name: Verify Flutter setup
-        working-directory: build-workspace/${{ steps.find_project.outputs.project_path }}
-        run: |
-          echo "=== Flutter Info ==="
-          flutter --version
-          flutter doctor
-          echo "=== Dart Info ==="
-          dart --version
-          echo "=== Pubspec Check ==="
-          cat pubspec.yaml | head -20
-
-      # ============================================================
-      # 8. Build APK (Release)
-      # ============================================================
-      - name: Build APK (Release)
+      - name: Build Release APK
         if: github.event.inputs.build_type == 'release'
-        working-directory: build-workspace/${{ steps.find_project.outputs.project_path }}
-        run: |
-          echo "Building Release APK..."
-          flutter build apk \
-            --release \
-            --verbose \
-            --no-tree-shake-icons \
-            2>&1 | tee build.log
-          
-          # Check if APK was created
-          if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            echo "✅ APK built successfully"
-            ls -lh build/app/outputs/flutter-apk/app-release.apk
-          else
-            echo "❌ APK build failed"
-            tail -100 build.log
-            exit 1
-          fi
+        working-directory: work/${{ steps.project.outputs.path }}
+        run: flutter build apk --release
 
-      # ============================================================
-      # 9. Build APK (Debug)
-      # ============================================================
-      - name: Build APK (Debug)
+      - name: Build Debug APK
         if: github.event.inputs.build_type == 'debug'
-        working-directory: build-workspace/${{ steps.find_project.outputs.project_path }}
-        run: |
-          echo "Building Debug APK..."
-          flutter build apk \
-            --debug \
-            --verbose \
-            --no-tree-shake-icons \
-            2>&1 | tee build.log
-          
-          # Check if APK was created
-          if [ -f build/app/outputs/flutter-apk/app-debug.apk ]; then
-            echo "✅ APK built successfully"
-            ls -lh build/app/outputs/flutter-apk/app-debug.apk
-          else
-            echo "❌ APK build failed"
-            tail -100 build.log
-            exit 1
-          fi
+        working-directory: work/${{ steps.project.outputs.path }}
+        run: flutter build apk --debug
 
-      # ============================================================
-      # 10. Upload Artifacts (Release)
-      # ============================================================
-      - name: Upload Release APK artifact
+      - name: Upload Release APK
         if: github.event.inputs.build_type == 'release' && success()
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
-          path: build-workspace/${{ steps.find_project.outputs.project_path }}/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+          path: work/${{ steps.project.outputs.path }}/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 7
 
-      # ============================================================
-      # 11. Upload Artifacts (Debug)
-      # ============================================================
-      - name: Upload Debug APK artifact
+      - name: Upload Debug APK
         if: github.event.inputs.build_type == 'debug' && success()
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
-          path: build-workspace/${{ steps.find_project.outputs.project_path }}/build/app/outputs/flutter-apk/app-debug.apk
-          if-no-files-found: error
+          path: work/${{ steps.project.outputs.path }}/build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 7
-
-      # ============================================================
-      # 12. Upload Build Log (untuk debug jika error)
-      # ============================================================
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: build-workspace/${{ steps.find_project.outputs.project_path }}/build.log
-          retention-days: 3
-
-      # ============================================================
-      # 13. Create Build Summary
-      # ============================================================
-      - name: Create build summary
-        if: always()
-        run: |
-          echo "=== BUILD SUMMARY ===" >> $GITHUB_STEP_SUMMARY
-          echo "Build Type: ${{ github.event.inputs.build_type }}" >> $GITHUB_STEP_SUMMARY
-          echo "Job ID: ${{ github.event.inputs.tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ job.status }}" = "success" ]; then
-            echo "✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Build Failed!" >> $GITHUB_STEP_SUMMARY
-          fi
