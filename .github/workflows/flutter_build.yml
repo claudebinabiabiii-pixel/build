@@ -1,0 +1,62 @@
+name: Flutter Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'URL ke ZIP project Flutter'
+        required: true
+      tag:
+        description: 'Tag/ID build'
+        required: true
+      build_type:
+        description: 'Build type (release/debug)'
+        required: false
+        default: 'release'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Flutter SDK
+        uses: actions/checkout@v3
+        with:
+          repository: flutter/flutter
+          ref: stable
+          path: flutter
+
+      - name: Add Flutter to PATH
+        run: echo "${{ github.workspace }}/flutter/bin" >> $GITHUB_PATH
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'adopt'
+          java-version: '11'
+
+      - name: Download project from URL
+        run: |
+          mkdir -p project
+          cd project
+          wget -q "${{ github.event.inputs.zip_url }}" -O project.zip
+          unzip -q project.zip
+          rm project.zip
+          ls -la
+
+      - name: Get Flutter dependencies
+        run: |
+          cd project
+          flutter pub get
+
+      - name: Build APK
+        run: |
+          cd project
+          flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-apk
+          path: project/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
